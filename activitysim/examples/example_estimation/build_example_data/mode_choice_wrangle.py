@@ -3,7 +3,7 @@ import polars as pl
 
 df = pl.read_csv("trip_mode_coefficients_p.csv", comment_prefix="#")
 
-alts = list(df.drop("Expression").columns)
+alts = [col for col in df.columns if col != "Expression"]
 alts_str = "_".join(alts)
 
 # Convert to long format (equivalent to pandas unstack)
@@ -40,7 +40,10 @@ for alt in alts:
             how="left"
         )
     )
-    df = df.with_columns(alt_df.get_column("coefficient_name").alias(alt))
+    # Update the original dataframe with coefficient names
+    df = df.with_columns(
+        alt_df.get_column("coefficient_name").alias(alt)
+    )
 
 # Write outputs
 coefficients_df.select(["coefficient_name", "value"]).write_csv("trip_mode_choice_coefficients.csv")

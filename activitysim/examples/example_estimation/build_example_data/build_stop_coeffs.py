@@ -35,13 +35,17 @@ for what in [
     # Drop null values
     df_melted = df_melted.drop_nulls()
 
-    # Drop duplicates based on Description and value
+    # Drop duplicates based on Description and value (keep first)
     df_melted = df_melted.unique(subset=["Description", "value"], keep="first")
 
     # Check for duplicates in Description column to create coefficient names
     description_counts = df_melted.group_by("Description").agg(pl.count().alias("count"))
-    dupes_df = description_counts.filter(pl.col("count") > 1)
-    duplicate_descriptions = dupes_df.get_column("Description").to_list()
+    duplicate_descriptions = (
+        description_counts
+        .filter(pl.col("count") > 1)
+        .get_column("Description")
+        .to_list()
+    )
 
     # Create coefficient names based on whether there are duplicates
     df_melted = df_melted.with_columns(
@@ -63,37 +67,34 @@ for what in [
     df_final = df_melted.drop("alt")
     df_final.write_csv(f"stop_frequency_coefficients_{what}.csv")
 
-    # Load original spec for updating
+    # Load original spec for updating - convert to pandas for easier manipulation
+    # then convert back to polars for output
     spec = pl.read_csv(f"stop_frequency_backup_{what}.csv", comment_prefix="#")
+    spec_pd = spec.to_pandas()
+    
     alt_cols = spec.columns[2:]
 
-    # Update spec with coefficient names
+    # Update spec with coefficient names - use the original pandas-style logic
+    # for easier row/column manipulation
     for row in df_final.iter_rows(named=True):
         description = row["Description"]
         value = row["value"]
         coeff_name = row["coefficient_name"]
         
-        # Get the row matching this description
-        mask = spec.get_column("Description") == description
+        # Create mapping for this coefficient
+        value_to_coeff = {value: coeff_name}
+        
+        # Get the row(s) matching this description
+        mask = spec_pd["Description"] == description
         if mask.any():
-            row_idx = mask.arg_max()  # Get first matching index
-            
-            # Update alt columns for this row
+            # For each alternative column, replace matching values
             for alt_col in alt_cols:
-                current_val = spec[row_idx, alt_col]
-                if current_val == value:
-                    # Create a new dataframe with the updated value
-                    spec = spec.with_columns(
-                        pl.when(
-                            (pl.col("Description") == description) & 
-                            (pl.col(alt_col) == value)
-                        )
-                        .then(pl.lit(coeff_name))
-                        .otherwise(pl.col(alt_col))
-                        .alias(alt_col)
-                    )
+                original_values = spec_pd.loc[mask, alt_col].values
+                updated_values = [value_to_coeff.get(val, val) for val in original_values]
+                spec_pd.loc[mask, alt_col] = updated_values
 
-    # Add Label column
+    # Convert back to polars and add Label column
+    spec = pl.from_pandas(spec_pd)
     spec = spec.with_columns(
         (pl.lit("util_") + pl.col("Description")).alias("Label")
     )
