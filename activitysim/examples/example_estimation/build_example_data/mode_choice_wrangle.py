@@ -1,38 +1,50 @@
 import numpy as np
-import pandas as pd
+import polars as pl
 
-df = pd.read_csv(f"trip_mode_coefficients_p.csv", comment="#")
+df = pl.read_csv("trip_mode_coefficients_p.csv", comment_prefix="#")
 
-alts = list(df.drop(columns="Expression").columns.values.astype(str))
+alts = [col for col in df.columns if col != "Expression"]
 alts_str = "_".join(alts)
 
-df = df.set_index("Expression").unstack()
+# Convert to long format (equivalent to pandas unstack)
+df_melted = df.melt(id_vars="Expression", variable_name="alts", value_name="value")
 
-df = df.reset_index().rename(columns={"level_0": "alts", 0: "value"})
-
-df = df.groupby(["Expression", "value"]).agg(lambda col: "_".join(col)).reset_index()
-
-df["coefficient_name"] = "coef_" + np.where(
-    df.alts == alts_str, df["Expression"], df["Expression"] + "_" + df.alts
+# Group by Expression and value, then aggregate alts with string join
+df_grouped = (
+    df_melted
+    .group_by(["Expression", "value"])
+    .agg(pl.col("alts").str.concat("_").alias("alts"))
 )
 
-coefficients_df = df
+# Create coefficient names
+df_grouped = df_grouped.with_columns(
+    pl.when(pl.col("alts") == alts_str)
+    .then(pl.lit("coef_") + pl.col("Expression"))
+    .otherwise(pl.lit("coef_") + pl.col("Expression") + "_" + pl.col("alts"))
+    .alias("coefficient_name")
+)
 
+coefficients_df = df_grouped
 
-df = pd.read_csv(f"trip_mode_coefficients_p.csv", comment="#")
+# Re-read the original data
+df = pl.read_csv("trip_mode_coefficients_p.csv", comment_prefix="#")
 
+# For each alternative, merge with coefficients to replace values with coefficient names
 for alt in alts:
-    alt_df = pd.merge(
-        df[["Expression", alt]].rename(columns={alt: "value"}),
-        coefficients_df[["Expression", "value", "coefficient_name"]],
-        left_on=["Expression", "value"],
-        right_on=["Expression", "value"],
-        how="left",
+    alt_df = (
+        df.select(["Expression", alt])
+        .rename({alt: "value"})
+        .join(
+            coefficients_df.select(["Expression", "value", "coefficient_name"]),
+            on=["Expression", "value"],
+            how="left"
+        )
     )
-    df[alt] = alt_df["coefficient_name"]
+    # Update the original dataframe with coefficient names
+    df = df.with_columns(
+        alt_df.get_column("coefficient_name").alias(alt)
+    )
 
-coefficients_df = coefficients_df[["coefficient_name", "value"]]
-coefficients_df.to_csv(f"trip_mode_choice_coefficients.csv", index=False)
-
-
-df.to_csv(f"trip_mode_choice_coefficients_template.csv", index=False)
+# Write outputs
+coefficients_df.select(["coefficient_name", "value"]).write_csv("trip_mode_choice_coefficients.csv")
+df.write_csv("trip_mode_choice_coefficients_template.csv")
