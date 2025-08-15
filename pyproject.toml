@@ -18,6 +18,7 @@ dependencies = [
     "pandas >= 2",
     "pandera >=0.15, <0.18.1",
     "platformdirs",
+    "polars >= 0.20",
     "psutil >= 4.1",
     "pyarrow >= 2.0",
     "pydantic >= 2.6",
